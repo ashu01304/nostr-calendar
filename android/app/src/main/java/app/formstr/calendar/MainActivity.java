@@ -22,7 +22,9 @@ public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "MainActivity";
     private static final String NOTIFICATION_WORK_NAME = "calendar_notification_worker";
+    private static final String INVITATION_WORK_NAME = "invitation_check_worker";
     private String pendingIcsContent = null;
+    private String pendingRoute = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,13 +38,16 @@ public class MainActivity extends BridgeActivity {
         });
 
         scheduleNotificationWorker();
+        scheduleInvitationWorker();
         handleIcsIntent(getIntent());
+        handleRouteIntent(getIntent());
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         handleIcsIntent(intent);
+        handleRouteIntent(intent);
     }
 
     private void handleIcsIntent(Intent intent) {
@@ -87,12 +92,33 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private void handleRouteIntent(Intent intent) {
+        if (intent == null) return;
+        String route = intent.getStringExtra("openRoute");
+        if (route == null) return;
+
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            String escaped = route.replace("\\", "\\\\").replace("'", "\\'");
+            String js = "window.dispatchEvent(new CustomEvent('openRoute', { detail: '" + escaped + "' }));";
+            getBridge().getWebView().post(() ->
+                    getBridge().getWebView().evaluateJavascript(js, null));
+        } else {
+            pendingRoute = route;
+        }
+        // Clear the extra so it doesn't fire again on configuration change
+        intent.removeExtra("openRoute");
+    }
+
     @Override
     public void onStart() {
         super.onStart();
         if (pendingIcsContent != null && getBridge() != null && getBridge().getWebView() != null) {
             sendIcsToWebView(pendingIcsContent);
             pendingIcsContent = null;
+        }
+        if (pendingRoute != null && getBridge() != null && getBridge().getWebView() != null) {
+            handleRouteIntent(new Intent().putExtra("openRoute", pendingRoute));
+            pendingRoute = null;
         }
     }
 
@@ -103,6 +129,22 @@ public class MainActivity extends BridgeActivity {
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                 NOTIFICATION_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                workRequest);
+    }
+
+    private void scheduleInvitationWorker() {
+        androidx.work.Constraints constraints = new androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                .build();
+
+        PeriodicWorkRequest workRequest = new PeriodicWorkRequest.Builder(
+                InvitationWorker.class, 1, TimeUnit.HOURS)
+                .setConstraints(constraints)
+                .build();
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                INVITATION_WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
                 workRequest);
     }

@@ -147,8 +147,8 @@ describe("scheduleEventNotifications", () => {
     expect(mockSchedule).not.toHaveBeenCalled();
   });
 
-  it("skips non-repeating events more than 2 days away", async () => {
-    const farFuture = Date.now() + 3 * DAY;
+  it("skips non-repeating events more than 5 days away", async () => {
+    const farFuture = Date.now() + 6 * DAY;
     const event = makeEvent({ begin: farFuture });
 
     await scheduleEventNotifications(event);
@@ -216,13 +216,10 @@ describe("scheduleEventNotifications – recurring events", () => {
     expect(scheduled[0].extra.notificationKey).toContain("daily-evt:");
   });
 
-  it("does not schedule for a weekly recurring event whose next occurrence is > 2 days away", async () => {
-    // Event started on a Monday, today is Wednesday → next occurrence is next Monday (5 days away)
-    // Use a fixed date to be deterministic
+  it("does not schedule for a weekly recurring event whose next occurrence is > 5 days away", async () => {
     const now = Date.now();
-    // Find when the next weekly occurrence would be, starting from 3 days ago
-    // If event started 3 days ago weekly, next occurrence is 4 days from now → out of 2-day window
-    const startDate = now - 3 * DAY;
+    // Event started 1 day ago weekly, next occurrence is 6 days from now → out of 5-day window
+    const startDate = now - 1 * DAY;
     const event = makeEvent({
       begin: startDate,
       id: "weekly-far",
@@ -234,7 +231,7 @@ describe("scheduleEventNotifications – recurring events", () => {
     expect(mockSchedule).not.toHaveBeenCalled();
   });
 
-  it("schedules for a weekly recurring event with occurrence within 2 days", async () => {
+  it("schedules for a weekly recurring event with occurrence within 5 days", async () => {
     // Event started exactly 7 days ago → next occurrence is now (today)
     const oneWeekAgo = Date.now() - 7 * DAY + HOUR; // +1h so it's in the future
     const event = makeEvent({

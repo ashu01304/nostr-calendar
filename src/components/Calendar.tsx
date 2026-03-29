@@ -15,7 +15,7 @@ function Calendar() {
   const { user } = useUser();
   const events = useTimeBasedEvents((state) => state);
   const { calendars, isLoaded: calendarsLoaded } = useCalendarLists();
-  const { fetchInvitations, invitations } = useInvitations();
+  const { fetchInvitations, stopInvitations, invitations } = useInvitations();
 
   // When user is logged in, fetch calendar lists and invitations.
   // Private events are fetched reactively when calendars are loaded.
@@ -35,6 +35,11 @@ function Calendar() {
       events.fetchPrivateEvents();
     }
   }, [user, calendarsLoaded, calendars]);
+
+  // Cleanup invitation listener on unmount
+  useEffect(() => {
+    return () => stopInvitations();
+  }, []);
 
   const { layout } = useLayout();
   const visibileCalendars = new Set(

@@ -35,6 +35,7 @@ import type { IInvitation } from "../utils/calendarListTypes";
 import { EventKinds } from "../common/EventConfigs";
 import type { SubscriptionHandle } from "../common/nostrRuntime";
 import { getDTag } from "../common/nostrRuntime/utils/helpers";
+import { BG_KEY_LAST_INVITATION_FETCH_TIME } from "../utils/constants";
 
 const INVITATIONS_STORAGE_KEY = "cal:invitations";
 
@@ -43,6 +44,10 @@ const saveInvitationsToStorage = (invitations: IInvitation[]) => {
 };
 
 let invitationSubHandle: SubscriptionHandle | undefined;
+let processingTimer: ReturnType<typeof setInterval> | undefined;
+let pendingBuffer: IInvitation[] = [];
+let processedIds = new Set<string>();
+let isListening = false;
 
 interface InvitationsState {
   invitations: IInvitation[];
@@ -51,6 +56,7 @@ interface InvitationsState {
 
   loadCachedInvitations: () => Promise<void>;
   fetchInvitations: () => void;
+  stopInvitations: () => void;
   acceptInvitation: (giftWrapId: string, calendarId: string) => Promise<void>;
   dismissInvitation: (giftWrapId: string) => void;
   clearCachedInvitations: () => Promise<void>;
@@ -87,29 +93,32 @@ export const useInvitations = create<InvitationsState>((set, get) => ({
    * 3. Adds it as a pending invitation
    */
   fetchInvitations: async () => {
+    // No-op if already listening
+    if (isListening) return;
+
     const userPubkey = await getUserPublicKey();
     if (!userPubkey) return;
 
-    let invitationsCheckedCount = 0;
+    isListening = true;
 
-    // Get all event IDs already in calendars for deduplication
-    const existingEventIds = new Set(
-      useCalendarLists.getState().getAllEventIds(),
-    );
+    // Process buffered invitations: fetch their private events and merge into store
+    function processBuffer() {
+      if (pendingBuffer.length === 0) return;
 
-    // Track processed IDs to avoid duplicate processing within this fetch
-    const processedIds = new Set<string>();
-    const invitations: IInvitation[] = [];
+      // Update the last invitation fetch time for the background worker
+      setSecureItem(
+        BG_KEY_LAST_INVITATION_FETCH_TIME,
+        Math.floor(Date.now() / 1000),
+      );
 
-    const checkForReceivedInvitations = () =>
-      setTimeout(onInvitationsFetched, 4000);
+      const batch = pendingBuffer.splice(0);
 
-    function onInvitationEventsFetched() {
+      // Merge raw invitations into store immediately
       set((state) => {
-        const newEventIds = new Set(invitations.map((i) => i.eventId));
+        const newEventIds = new Set(batch.map((i) => i.eventId));
         const updated = [
           ...state.invitations.filter((i) => !newEventIds.has(i.eventId)),
-          ...invitations,
+          ...batch,
         ];
         const unreadCount = updated.filter(
           (i) => i.status === "pending",
@@ -117,23 +126,20 @@ export const useInvitations = create<InvitationsState>((set, get) => ({
         saveInvitationsToStorage(updated);
         return { invitations: updated, unreadCount };
       });
-    }
 
-    function onInvitationsFetched() {
+      // Resolve private event details for the batch
       const kinds = new Set<number>();
       const pubkeys = new Set<string>();
       const eventIds = new Set<string>();
-      invitationsCheckedCount++;
-      if (invitationsCheckedCount > 2) {
-        return;
-      }
-      invitations.forEach((inv) => {
+      batch.forEach((inv) => {
         if ([EventKinds.PrivateCalendarEvent].includes(inv.kind)) {
           kinds.add(inv.kind);
           pubkeys.add(inv.pubkey);
           eventIds.add(inv.eventId);
         }
       });
+
+      if (eventIds.size === 0) return;
 
       fetchPrivateCalendarEvents(
         {
@@ -143,10 +149,8 @@ export const useInvitations = create<InvitationsState>((set, get) => ({
         },
         (event) => {
           const eventId = getDTag(event);
-          const invitation = invitations.find((inv) => inv.eventId === eventId);
-          if (!invitation) {
-            return;
-          }
+          const invitation = batch.find((inv) => inv.eventId === eventId);
+          if (!invitation) return;
           const decrypted = viewPrivateEvent(event, invitation.viewKey);
           const parsed = nostrEventToCalendar(decrypted, {
             viewKey: invitation.viewKey,
@@ -154,43 +158,82 @@ export const useInvitations = create<InvitationsState>((set, get) => ({
           });
           invitation.event = { ...parsed, isInvitation: true };
         },
-        onInvitationEventsFetched,
+        () => {
+          // After private events are fetched, update store with resolved events
+          set((state) => {
+            const resolvedIds = new Set(batch.map((i) => i.eventId));
+            const updated = [
+              ...state.invitations.filter((i) => !resolvedIds.has(i.eventId)),
+              ...batch,
+            ];
+            const unreadCount = updated.filter(
+              (i) => i.status === "pending",
+            ).length;
+            saveInvitationsToStorage(updated);
+            return { invitations: updated, unreadCount };
+          });
+        },
       );
-      checkForReceivedInvitations();
     }
 
+    // Start the periodic processing timer
+    processingTimer = setInterval(processBuffer, 5000);
+
+    // Start the persistent subscription
     invitationSubHandle = fetchCalendarGiftWraps(
       {
         participants: [userPubkey],
         limit: 50,
       },
-      async (rumor) => {
+      (rumor) => {
+        // Get fresh existing event IDs for deduplication
+        const existingEventIds = new Set(
+          useCalendarLists.getState().getAllEventIds(),
+        );
+
         // Skip if already in a calendar
         if (existingEventIds.has(rumor.eventId)) return;
-        // Skip if already processed in this session
+        // Skip if already processed
         if (processedIds.has(rumor.eventId)) return;
         processedIds.add(rumor.eventId);
 
-        // Check if already in invitations list
-        const { invitations: fetchedInvitations } = get();
-        if (fetchedInvitations.some((inv) => inv.eventId === rumor.eventId))
+        // Skip if already in store
+        const { invitations: currentInvitations } = get();
+        if (currentInvitations.some((inv) => inv.eventId === rumor.eventId))
           return;
 
-        // Create the invitation entry
-        const invitation: IInvitation = {
+        // Buffer for next processing cycle
+        pendingBuffer.push({
           originalInvitationId: rumor.originalInvitationId,
-          giftWrapId: rumor.eventId, // Using eventId as identifier
+          giftWrapId: rumor.eventId,
           eventId: rumor.eventId,
           viewKey: rumor.viewKey,
           receivedAt: Date.now(),
           status: "pending",
           pubkey: rumor.authorPubkey,
           kind: rumor.kind,
-        };
-        invitations.push(invitation);
+        });
       },
-      onInvitationsFetched,
+      () => {}, // EOSE ignored — processing is timer-based
     );
+  },
+
+  /**
+   * Stops the invitation listener and processing timer.
+   * Call on app unmount.
+   */
+  stopInvitations: () => {
+    if (processingTimer) {
+      clearInterval(processingTimer);
+      processingTimer = undefined;
+    }
+    if (invitationSubHandle) {
+      invitationSubHandle.unsubscribe();
+      invitationSubHandle = undefined;
+    }
+    pendingBuffer = [];
+    processedIds = new Set();
+    isListening = false;
   },
 
   /**
@@ -265,10 +308,7 @@ export const useInvitations = create<InvitationsState>((set, get) => ({
    * Clears all cached invitation data. Called on logout.
    */
   clearCachedInvitations: async () => {
-    if (invitationSubHandle) {
-      invitationSubHandle.unsubscribe();
-      invitationSubHandle = undefined;
-    }
+    get().stopInvitations();
     await removeSecureItem(INVITATIONS_STORAGE_KEY);
     set({ invitations: [], unreadCount: 0, isLoaded: false });
   },

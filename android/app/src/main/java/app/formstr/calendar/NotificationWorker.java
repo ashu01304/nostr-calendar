@@ -25,14 +25,14 @@ import java.util.Set;
 /**
  * Background worker that periodically reads cached calendar events from
  * Capacitor Preferences (SharedPreferences) and schedules local notifications
- * for recurring events due within the next 2 days.
+ * for recurring events due within the next 5 days.
  */
 public class NotificationWorker extends Worker {
 
     private static final String TAG = "NotificationWorker";
     private static final String PREFS_NAME = "CapacitorStorage";
     private static final String EVENTS_KEY = "cal:events";
-    private static final long TWO_DAYS_MS = 2L * 24 * 60 * 60 * 1000;
+    private static final long SCHEDULE_WINDOW_MS = 5L * 24 * 60 * 60 * 1000;
     private static final long TEN_MINUTES_MS = 10L * 60 * 1000;
 
     public NotificationWorker(@NonNull Context context, @NonNull WorkerParameters params) {
@@ -57,7 +57,7 @@ public class NotificationWorker extends Worker {
             JSONArray events = new JSONArray(eventsJson);
             Set<Integer> existingNotificationIds = getExistingNotificationIds();
             long now = System.currentTimeMillis();
-            long twoDaysFromNow = now + TWO_DAYS_MS;
+            long twoDaysFromNow = now + SCHEDULE_WINDOW_MS;
             int scheduled = 0;
 
             for (int i = 0; i < events.length(); i++) {
@@ -104,7 +104,7 @@ public class NotificationWorker extends Worker {
             // Build location string from location array
             String location = buildLocationString(event);
 
-            // Find the next occurrence in the 2-day window
+            // Find the next occurrence in the schedule window
             long nextOccurrence = getNextOccurrenceInRange(begin, end, rrule, now, twoDaysFromNow);
             if (nextOccurrence < 0) {
                 return 0;
@@ -283,7 +283,7 @@ public class NotificationWorker extends Worker {
             cal.setTimeInMillis(begin);
         }
 
-        // Search up to rangeEnd (max ~2 days, so 3 iterations at most)
+        // Search up to rangeEnd day by day
         while (cal.getTimeInMillis() <= rangeEnd) {
             if (allowedDays.contains(cal.get(Calendar.DAY_OF_WEEK))
                     && cal.getTimeInMillis() >= rangeStart) {

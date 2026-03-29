@@ -62,7 +62,7 @@ export async function scheduleEventNotifications(
   await initScheduledIds();
 
   const now = Date.now();
-  const twoDaysFromNow = now + 2 * 24 * 60 * 60 * 1000;
+  const nDaysFromNow = now + 5 * 24 * 60 * 60 * 1000;
 
   const isRepeating = !!event.repeat?.rrule;
 
@@ -70,14 +70,14 @@ export async function scheduleEventNotifications(
   let occurrenceStart: number;
 
   if (isRepeating) {
-    const nextOccurrence = getNextOccurrenceInRange(event, now, twoDaysFromNow);
+    const nextOccurrence = getNextOccurrenceInRange(event, now, nDaysFromNow);
     if (nextOccurrence === null) return [];
     occurrenceStart = nextOccurrence;
   } else {
     // Non-repeating: skip if already started
     if (event.begin <= now) return [];
     // Skip if more than 2 days away
-    if (event.begin > twoDaysFromNow) return [];
+    if (event.begin > nDaysFromNow) return [];
     occurrenceStart = event.begin;
   }
 

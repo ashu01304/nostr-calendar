@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { setItem } from "../common/localStorage";
+import {
+  setItem,
+  setSecureItem,
+  removeSecureItem,
+} from "../common/localStorage";
 import { signerManager } from "../common/signer";
 import { useTimeBasedEvents } from "./events";
 import { cancelAllNotifications } from "../utils/notifications";
@@ -8,6 +12,12 @@ import { useRelayStore } from "./relays";
 import { useCalendarLists } from "./calendarLists";
 import { useInvitations } from "./invitations";
 import { nostrRuntime } from "../common/nostrRuntime";
+import {
+  BG_KEY_USER_PUBKEY,
+  BG_KEY_RELAYS,
+  BG_KEY_LAST_LOGIN_TIME,
+  BG_KEY_LAST_INVITATION_FETCH_TIME,
+} from "../utils/constants";
 
 export interface IUser {
   name?: string;
@@ -50,6 +60,11 @@ export const useUser = create<{
     await useTimeBasedEvents.getState().clearCachedEvents();
     await useCalendarLists.getState().clearCachedCalendars();
     await useInvitations.getState().clearCachedInvitations();
+    // Clear background worker keys
+    await removeSecureItem(BG_KEY_USER_PUBKEY);
+    await removeSecureItem(BG_KEY_RELAYS);
+    await removeSecureItem(BG_KEY_LAST_LOGIN_TIME);
+    await removeSecureItem(BG_KEY_LAST_INVITATION_FETCH_TIME);
     set({ user: null });
     localStorage.removeItem(USER_STORAGE_KEY);
   },
@@ -75,6 +90,13 @@ const onUserChange = async () => {
       const relays = await fetchRelayList(cachedUser.pubkey);
       const userRelays = relays.length > 0 ? relays : defaultRelays;
       useRelayStore.getState().setRelays(userRelays);
+      // Persist pubkey, relays, and login time for the background invitation worker
+      await setSecureItem(BG_KEY_USER_PUBKEY, cachedUser.pubkey);
+      await setSecureItem(BG_KEY_RELAYS, userRelays);
+      await setSecureItem(
+        BG_KEY_LAST_LOGIN_TIME,
+        Math.floor(Date.now() / 1000),
+      );
       // Fetch deletion events first so the EventStore knows which events
       // to reject before calendar list events arrive.
       await nostrRuntime.fetchDeletionEvents(userRelays, cachedUser.pubkey);
