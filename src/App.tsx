@@ -28,6 +28,9 @@ import { ICSListener } from "./components/ICSListener";
 import { ICalendarEvent } from "./utils/types";
 import { useCalendarLists } from "./stores/calendarLists";
 import { CalendarManageDialog } from "./components/CalendarManageDialog";
+import { AppLoadingBar } from "./components/AppLoadingBar";
+import { AppStatusMessage } from "./components/AppStatusMessage";
+import { useAppStartup } from "./hooks/useAppStartup";
 
 const browserLocale =
   (navigator.languages && navigator.languages[0]) ||
@@ -57,6 +60,9 @@ function Application() {
     fetchCalendars,
   } = useCalendarLists();
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false);
+
+  // Startup state machine: drives the loading bar + status message
+  const { stage, statusMessage, retry } = useAppStartup(appMode);
 
   useEffect(() => {
     initializeUser();
@@ -153,6 +159,7 @@ function Application() {
   return (
     <>
       <Header onImportEvent={setImportedEvent} />
+
       <ICSListener
         importedEvent={importedEvent}
         onClose={() => setImportedEvent(null)}
@@ -162,6 +169,7 @@ function Application() {
         open={showLoginModal}
         onClose={() => updateLoginModal(false)}
       />
+
       {showOnboardingDialog && (
         <CalendarManageDialog
           open={showOnboardingDialog}
@@ -171,8 +179,20 @@ function Application() {
           blocking
         />
       )}
+
       <RelayManager />
       <Toolbar />
+      
+      {/* Startup indicators float inside normal flow, positioned straight under toolbar */}
+      <Box sx={{ position: "relative", zIndex: (theme) => theme.zIndex.drawer + 1 }}>
+        <AppLoadingBar stage={stage} />
+        <AppStatusMessage
+          stage={stage}
+          statusMessage={statusMessage}
+          onRetry={retry}
+        />
+      </Box>
+
       <Box>{isInitialized && <Routing />}</Box>
     </>
   );
